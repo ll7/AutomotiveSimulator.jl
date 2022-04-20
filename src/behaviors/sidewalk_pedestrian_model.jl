@@ -6,8 +6,12 @@ For a crossing pedestrian, phases go: -2, -1, 0, 1
 For a non-crossing pedestrian that pauses at the crosswalk, phases go: -2, -1, 1
 For a non-crossing pedestrian that does not pause at the crosswalk, phases go: -2, 1
 
+
+
 Model based on Feliciani et al (2017) - A simulation model for non-signalized pedestrian
 crosswalks based on evidence from on field observation.
+
+<https://www.researchgate.net/publication/321582871_A_simulation_model_for_non-signalized_pedestrian_crosswalks_based_on_evidence_from_on_field_observation>
 """
 struct CrossingPhase
     phase::Int # -2, -1, 0, 1
@@ -67,7 +71,20 @@ end
 
 Base.rand(rng::AbstractRNG, model::SidewalkPedestrianModel) = model.a
 
-function AutomotiveSimulator.observe!(model::SidewalkPedestrianModel, scene::Scene{Entity{VehicleState, D, I}}, roadway::Roadway, egoid::I) where {D, I}
+"""
+function AutomotiveSimulator.observe!(
+    model::SidewalkPedestrianModel, 
+    scene::Scene{Entity{VehicleState, D, I}}, 
+    roadway::Roadway, egoid::I
+    ) where {D, I}
+
+Observe the pedestrian environment and update based on observation.
+"""
+function AutomotiveSimulator.observe!(
+    model::SidewalkPedestrianModel,
+    scene::Scene{Entity{VehicleState,D,I}},
+    roadway::Roadway, egoid::I
+) where {D,I}
     ped = scene[findfirst(egoid, scene)]
 
     push!(model.pos_x, posg(ped.state).x)
@@ -88,33 +105,46 @@ function AutomotiveSimulator.observe!(model::SidewalkPedestrianModel, scene::Sce
     end
 end
 
-function update_approaching(ped::Entity{S, D, I},
-                            model::SidewalkPedestrianModel,
-                            roadway::Roadway,
-                            crosswalk::Lane,
-                            sw_origin::Lane
-                            ) where {S, D, I}
+"""
+Keep walking at constant speed until close to crosswalk.
+If waiting to cross, go to appraising. Else, go to leaving phase
+"""
+function update_approaching(ped::Entity{S,D,I},
+    model::SidewalkPedestrianModel,
+    roadway::Roadway,
+    crosswalk::Lane,
+    sw_origin::Lane
+) where {S,D,I}
     # Keep walking at constant speed until close to crosswalk
     # If waiting to cross, go to appraising. Else, go to leaving phase
     Δs = get_distance_to_lane(ped, crosswalk, roadway)
+
+    # If close to crosswalk, go to appraising
     if Δs < 3.0
         model.phase = APPRAISING
     end
 end
 
-function update_appraising(ped::Entity{S, D, I},
-                           scene::Scene,
-                           model::SidewalkPedestrianModel,
-                           roadway::Roadway,
-                           crosswalk::Lane,
-                           sw_origin::Lane,
-                           ) where {S, D<:AbstractAgentDefinition, I}
+"""
+Decelerate until reach curbside and if close enough, go to CROSSING phase
+"""
+function update_appraising(ped::Entity{S,D,I},
+    scene::Scene,
+    model::SidewalkPedestrianModel,
+    roadway::Roadway,
+    crosswalk::Lane,
+    sw_origin::Lane,
+) where {S,D<:AbstractAgentDefinition,I}
 
     Δs = get_distance_to_lane(ped, crosswalk, roadway)
+
+    # If close to crosswalk, check for save crossing.
     if Δs < 0.1
         set_inst_vel(ped, model, sw_origin, 0.0)
 
         for veh in scene
+
+            # ignore other pedestrians
             if class(veh.def) == AgentClass.PEDESTRIAN
                 continue
             end
@@ -124,12 +154,15 @@ function update_appraising(ped::Entity{S, D, I},
             cw_posF = Frenet(posG, model.crosswalk, roadway)
             lane = get_lane(roadway, veh)
             Δs = get_distance_to_lane(veh, model.crosswalk, roadway)
-            ttc = Δs/vel(veh.state)
+            ttc = Δs / vel(veh.state)
 
+            # stay in APPRASING if a vehicle is close
             if 0.0 < ttc < model.ttc_threshold
                 return # Exit if any car is not within threshold
             end
         end
+
+        # If no vehicles are close, go to CROSSING
         model.phase = CROSSING
     else
         # Decelerate to appraise speed
@@ -137,44 +170,64 @@ function update_appraising(ped::Entity{S, D, I},
     end
 end
 
-
-function update_crossing(ped::Entity{S, D, I},
-                         scene::Scene,
-                         model::SidewalkPedestrianModel,
-                         roadway::Roadway,
-                         crosswalk::Lane
-                         ) where {S, D, I}
+"""
+Accelerate until desired speed while crossing 
+and transition to leaving when at end of corsswalk.
+"""
+function update_crossing(ped::Entity{S,D,I},
+    scene::Scene,
+    model::SidewalkPedestrianModel,
+    roadway::Roadway,
+    crosswalk::Lane
+) where {S,D,I}
     # Accelerate until desired speed
     set_accel(ped, model, model.v_des_cross, crosswalk)
+
     # If ped is at end of crosswalk, transition to leaving phase.
     Δs = get_distance_to_lane(ped, model.sw_dest, roadway)
-
     if Δs < 0.2
         set_inst_vel(ped, model, model.crosswalk, 0.0)
         model.phase = LEAVING
     end
 end
 
-
-function update_leaving(ped::Entity{S, D, I},
-                        scene::Scene,
-                        model::SidewalkPedestrianModel,
-                        roadway::Roadway,
-                        sw_dest::Lane
-                        ) where {S, D, I}
+"""
+Keep walking at constant speed
+"""
+function update_leaving(ped::Entity{S,D,I},
+    scene::Scene,
+    model::SidewalkPedestrianModel,
+    roadway::Roadway,
+    sw_dest::Lane
+) where {S,D,I}
     # Keep walking at constant speed
     set_accel(ped, model, model.v_des_approach, model.sw_dest)
 end
 
-function set_inst_vel(ped::Entity{VehicleState, D, I}, model::SidewalkPedestrianModel, lane_des::Lane, v_des::Float64) where {D, I}
-    model.a = PedestrianLatLonAccel(0.0, calc_a(vel(ped.state), v_des, model.timestep), lane_des)
+function set_inst_vel(
+    ped::Entity{VehicleState,D,I},
+    model::SidewalkPedestrianModel,
+    lane_des::Lane, v_des::Float64
+) where {D,I}
+    model.a = PedestrianLatLonAccel(
+        0.0,
+        calc_a(vel(ped.state),
+            v_des,
+            model.timestep),
+        lane_des
+    )
 end
 
 function calc_a(v_init::Float64, v::Float64, Δt::Float64)
-    return (v - v_init)/Δt
+    return (v - v_init) / Δt
 end
 
-function set_accel(ped::Entity{VehicleState, D, I}, model::SidewalkPedestrianModel, v_des::Float64, lane_des::Lane) where {D, I}
+function set_accel(
+    ped::Entity{VehicleState,D,I},
+    model::SidewalkPedestrianModel,
+    v_des::Float64,
+    lane_des::Lane
+) where {D,I}
     if vel(ped.state) < v_des
         model.a = PedestrianLatLonAccel(0.0, model.ped_accel, lane_des)
     elseif vel(ped.state) > v_des
@@ -184,10 +237,15 @@ function set_accel(ped::Entity{VehicleState, D, I}, model::SidewalkPedestrianMod
     end
 end
 
-
-# Edited from AutomotivePOMDPs.jl - projects collision point onto the lane.
-# Should work in any orientation.
-function get_distance_to_lane(veh::Entity{VehicleState, D, I}, lane_des::Lane, roadway::Roadway) where {D, I}
+"""
+Edited from AutomotivePOMDPs.jl - projects collision point onto the lane.
+Should work in any orientation.
+"""
+function get_distance_to_lane(
+    veh::Entity{VehicleState,D,I},
+    lane_des::Lane,
+    roadway::Roadway
+) where {D,I}
     vehlane = get_lane(roadway, veh)
     lane_segment = LineSegment(lane_des.curve[1].pos, lane_des.curve[end].pos)
     collision_point = intersect(Ray(posg(veh.state)), lane_segment)
