@@ -18,7 +18,7 @@ using AutomotiveSimulator
 using AutomotiveVisualization # for rendering
 AutomotiveVisualization.colortheme["background"] = colorant"white"; # hide
 
-roadway = gen_straight_roadway(1, 2000.0)  # 200m long straight roadway with 1 lane
+roadway = gen_straight_roadway(1, 2000.0)  # 2000 m long straight roadway with 1 lane
 scene = Scene([
     Entity(VehicleState(VecSE2(10.0,0.0,0.0), roadway, 8.0), VehicleDef(), 1),
     Entity(VehicleState(VecSE2(50.0,0.0,0.0), roadway, 12.5), VehicleDef(), 2),
